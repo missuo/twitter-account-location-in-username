@@ -385,6 +385,53 @@ function extractUsername(element) {
   return null;
 }
 
+// Helper function to find handle section
+function findHandleSection(container, screenName) {
+  return Array.from(container.querySelectorAll('div')).find(div => {
+    const link = div.querySelector(`a[href="/${screenName}"]`);
+    if (link) {
+      const text = link.textContent?.trim();
+      return text === `@${screenName}`;
+    }
+    return false;
+  });
+}
+
+// Create loading shimmer placeholder
+function createLoadingShimmer() {
+  const shimmer = document.createElement('span');
+  shimmer.setAttribute('data-twitter-flag-shimmer', 'true');
+  shimmer.style.display = 'inline-block';
+  shimmer.style.width = '20px';
+  shimmer.style.height = '16px';
+  shimmer.style.marginLeft = '4px';
+  shimmer.style.marginRight = '4px';
+  shimmer.style.verticalAlign = 'middle';
+  shimmer.style.borderRadius = '2px';
+  shimmer.style.background = 'linear-gradient(90deg, rgba(113, 118, 123, 0.2) 25%, rgba(113, 118, 123, 0.4) 50%, rgba(113, 118, 123, 0.2) 75%)';
+  shimmer.style.backgroundSize = '200% 100%';
+  shimmer.style.animation = 'shimmer 1.5s infinite';
+  
+  // Add animation keyframes if not already added
+  if (!document.getElementById('twitter-flag-shimmer-style')) {
+    const style = document.createElement('style');
+    style.id = 'twitter-flag-shimmer-style';
+    style.textContent = `
+      @keyframes shimmer {
+        0% {
+          background-position: -200% 0;
+        }
+        100% {
+          background-position: 200% 0;
+        }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+  
+  return shimmer;
+}
+
 // Function to add flag to username element
 async function addFlagToUsername(usernameElement, screenName) {
   // Check if flag already added
@@ -464,6 +511,10 @@ async function addFlagToUsername(usernameElement, screenName) {
   const flag = getCountryFlag(location);
   if (!flag) {
     console.log(`No flag found for location: ${location}`);
+    // Shimmer already removed above, but ensure it's gone
+    if (shimmerInserted && shimmerSpan.parentNode) {
+      shimmerSpan.remove();
+    }
     usernameElement.dataset.flagAdded = 'failed';
     return;
   }
@@ -479,7 +530,7 @@ async function addFlagToUsername(usernameElement, screenName) {
   
   // Strategy 1: Find link with @username text content (most reliable - this is the actual handle)
   if (containerForLink) {
-    const containerLinks = userNameContainer.querySelectorAll('a[href^="/"]');
+    const containerLinks = containerForLink.querySelectorAll('a[href^="/"]');
     for (const link of containerLinks) {
       const text = link.textContent?.trim();
       const href = link.getAttribute('href');
@@ -497,7 +548,7 @@ async function addFlagToUsername(usernameElement, screenName) {
   
   // Strategy 2: Find any link with @username text in UserName container
   if (!usernameLink && containerForLink) {
-    const containerLinks = userNameContainer.querySelectorAll('a[href^="/"]');
+    const containerLinks = containerForLink.querySelectorAll('a[href^="/"]');
     for (const link of containerLinks) {
       const text = link.textContent?.trim();
       if (text === `@${screenName}`) {
@@ -544,6 +595,10 @@ async function addFlagToUsername(usernameElement, screenName) {
       href: l.getAttribute('href'),
       text: l.textContent?.trim()
     })));
+    // Remove shimmer on error
+    if (shimmerInserted && shimmerSpan.parentNode) {
+      shimmerSpan.remove();
+    }
     usernameElement.dataset.flagAdded = 'failed';
     return;
   }
@@ -553,6 +608,10 @@ async function addFlagToUsername(usernameElement, screenName) {
   // Check if flag already exists (check in the entire container, not just parent)
   const existingFlag = usernameElement.querySelector('[data-twitter-flag]');
   if (existingFlag) {
+    // Remove shimmer if flag already exists
+    if (shimmerInserted && shimmerSpan.parentNode) {
+      shimmerSpan.remove();
+    }
     usernameElement.dataset.flagAdded = 'true';
     return;
   }
@@ -567,35 +626,33 @@ async function addFlagToUsername(usernameElement, screenName) {
   flagSpan.style.color = 'inherit';
   flagSpan.style.verticalAlign = 'middle';
   
-  // userNameContainer should already be found above (line 438)
-  // Verify it exists before proceeding
-  if (!userNameContainer) {
+  // Use userNameContainer found above, or find it if not found
+  const containerForFlag = userNameContainer || usernameElement.querySelector('[data-testid="UserName"], [data-testid="User-Name"]');
+  
+  if (!containerForFlag) {
     console.error(`Could not find UserName container for ${screenName}`);
+    // Remove shimmer on error
+    if (shimmerInserted && shimmerSpan.parentNode) {
+      shimmerSpan.remove();
+    }
     usernameElement.dataset.flagAdded = 'failed';
     return;
   }
   
   // Find the verification badge (SVG with data-testid="icon-verified")
-  const verificationBadge = userNameContainer.querySelector('[data-testid="icon-verified"]');
+  const verificationBadge = containerForFlag.querySelector('[data-testid="icon-verified"]');
   
   // Find the handle section - the div that contains the @username link
   // The structure is: User-Name > div (display name) > div (handle section with @username)
-  const handleSection = Array.from(userNameContainer.querySelectorAll('div')).find(div => {
-    const link = div.querySelector(`a[href="/${screenName}"]`);
-    if (link) {
-      const text = link.textContent?.trim();
-      return text === `@${screenName}`;
-    }
-    return false;
-  });
+  const handleSection = findHandleSection(containerForFlag, screenName);
 
   let inserted = false;
   
   // Strategy 1: Insert right before the handle section div (which contains @username)
   // The handle section is a direct child of User-Name container
-  if (handleSection && handleSection.parentNode === userNameContainer) {
+  if (handleSection && handleSection.parentNode === containerForFlag) {
     try {
-      userNameContainer.insertBefore(flagSpan, handleSection);
+      containerForFlag.insertBefore(flagSpan, handleSection);
       inserted = true;
       console.log(`✓ Inserted flag before handle section for ${screenName}`);
     } catch (e) {
@@ -608,13 +665,13 @@ async function addFlagToUsername(usernameElement, screenName) {
     try {
       // Insert before the handle section's parent (if it's not User-Name)
       const handleParent = handleSection.parentNode;
-      if (handleParent !== userNameContainer && handleParent.parentNode) {
+      if (handleParent !== containerForFlag && handleParent.parentNode) {
         handleParent.parentNode.insertBefore(flagSpan, handleParent);
         inserted = true;
         console.log(`✓ Inserted flag before handle parent for ${screenName}`);
-      } else if (handleParent === userNameContainer) {
+      } else if (handleParent === containerForFlag) {
         // Handle section is direct child, insert before it
-        userNameContainer.insertBefore(flagSpan, handleSection);
+        containerForFlag.insertBefore(flagSpan, handleSection);
         inserted = true;
         console.log(`✓ Inserted flag before handle section (direct child) for ${screenName}`);
       }
@@ -627,7 +684,7 @@ async function addFlagToUsername(usernameElement, screenName) {
   if (!inserted && handleSection) {
     try {
       // Find the display name link (first link)
-      const displayNameLink = userNameContainer.querySelector('a[href^="/"]');
+      const displayNameLink = containerForFlag.querySelector('a[href^="/"]');
       if (displayNameLink) {
         // Find the div that contains the display name link
         const displayNameContainer = displayNameLink.closest('div');
@@ -653,7 +710,7 @@ async function addFlagToUsername(usernameElement, screenName) {
   // Strategy 4: Insert at the end of User-Name container (fallback)
   if (!inserted) {
     try {
-      userNameContainer.appendChild(flagSpan);
+      containerForFlag.appendChild(flagSpan);
       inserted = true;
       console.log(`✓ Inserted flag at end of UserName container for ${screenName}`);
     } catch (e) {
@@ -679,8 +736,19 @@ async function addFlagToUsername(usernameElement, screenName) {
       console.error(`✗ Failed to insert flag for ${screenName} - tried all strategies`);
       console.error('Username link:', usernameLink);
       console.error('Parent structure:', usernameLink.parentNode);
+      // Remove shimmer on failure
+      if (shimmerInserted && shimmerSpan.parentNode) {
+        shimmerSpan.remove();
+      }
       usernameElement.dataset.flagAdded = 'failed';
     }
+  } catch (error) {
+    console.error(`Error processing flag for ${screenName}:`, error);
+    // Remove shimmer on error
+    if (shimmerInserted && shimmerSpan.parentNode) {
+      shimmerSpan.remove();
+    }
+    usernameElement.dataset.flagAdded = 'failed';
   } finally {
     // Remove from processing set
     processingUsernames.delete(screenName);
@@ -691,6 +759,10 @@ async function addFlagToUsername(usernameElement, screenName) {
 function removeAllFlags() {
   const flags = document.querySelectorAll('[data-twitter-flag]');
   flags.forEach(flag => flag.remove());
+  
+  // Also remove any loading shimmers
+  const shimmers = document.querySelectorAll('[data-twitter-flag-shimmer]');
+  shimmers.forEach(shimmer => shimmer.remove());
   
   // Reset flag added markers
   const containers = document.querySelectorAll('[data-flag-added]');
