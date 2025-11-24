@@ -43,6 +43,13 @@ The extension uses a page script injection approach to make API requests. This a
 
 The content script injects a script into the page context that listens for location fetch requests. When a username is detected, the content script sends a custom event to the page script, which makes the API request and returns the location data.
 
+### Rate Limiting & Cooldowns
+
+- Requests are queued with at most two running concurrently and at least two seconds between them
+- After every 10 requests the queue pauses for a random 45–90 seconds to mimic human activity
+- If no requests are made for 3 minutes the counter resets so light browsing remains responsive
+- When Twitter responds with HTTP 429 the extension waits for the server-provided reset time before trying again
+
 ## API Endpoint
 
 The extension uses Twitter's GraphQL API endpoint:

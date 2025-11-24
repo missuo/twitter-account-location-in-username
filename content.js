@@ -11,6 +11,14 @@ const MIN_REQUEST_INTERVAL = 2000; // 2 seconds between requests (increased to a
 const MAX_CONCURRENT_REQUESTS = 2; // Reduced concurrent requests
 let activeRequests = 0;
 let rateLimitResetTime = 0; // Unix timestamp when rate limit resets
+const REQUESTS_BEFORE_SLEEP = 10; // Number of requests before forcing a cooldown
+const SLEEP_DURATION_MIN_MS = 45000; // Minimum cooldown duration (45s)
+const SLEEP_DURATION_MAX_MS = 90000; // Maximum cooldown duration (90s)
+const SLEEP_IDLE_RESET_MS = 3 * 60 * 1000; // Reset counters if idle for 3 minutes
+let requestsSinceLastSleep = 0;
+let nextSleepEndTime = 0;
+let lastSleepRequestTimestamp = 0;
+let sleepResumeTimeout = null;
 
 // Observer for dynamically loaded content
 let observer = null;
@@ -157,6 +165,44 @@ function injectPageScript() {
   });
 }
 
+function scheduleSleepResume(waitTime, force = false) {
+  if (sleepResumeTimeout) {
+    if (!force) {
+      return;
+    }
+    clearTimeout(sleepResumeTimeout);
+  }
+  sleepResumeTimeout = setTimeout(() => {
+    sleepResumeTimeout = null;
+    processRequestQueue();
+  }, waitTime);
+}
+
+function shouldPauseForSleep() {
+  if (!nextSleepEndTime) {
+    return false;
+  }
+  const now = Date.now();
+  if (now >= nextSleepEndTime) {
+    nextSleepEndTime = 0;
+    return false;
+  }
+  const waitTime = nextSleepEndTime - now;
+  if (!sleepResumeTimeout) {
+    console.log(`Cooling down for ${Math.ceil(waitTime / 1000)} seconds to avoid being blocked`);
+    scheduleSleepResume(waitTime);
+  }
+  return true;
+}
+
+function getSleepDuration() {
+  if (SLEEP_DURATION_MAX_MS <= SLEEP_DURATION_MIN_MS) {
+    return SLEEP_DURATION_MIN_MS;
+  }
+  const jitter = SLEEP_DURATION_MAX_MS - SLEEP_DURATION_MIN_MS;
+  return SLEEP_DURATION_MIN_MS + Math.floor(Math.random() * jitter);
+}
+
 // Process request queue with rate limiting
 async function processRequestQueue() {
   if (isProcessingQueue || requestQueue.length === 0) {
@@ -165,9 +211,9 @@ async function processRequestQueue() {
   
   // Check if we're rate limited
   if (rateLimitResetTime > 0) {
-    const now = Math.floor(Date.now() / 1000);
-    if (now < rateLimitResetTime) {
-      const waitTime = (rateLimitResetTime - now) * 1000;
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    if (nowSeconds < rateLimitResetTime) {
+      const waitTime = (rateLimitResetTime - nowSeconds) * 1000;
       console.log(`Rate limited. Waiting ${Math.ceil(waitTime / 1000 / 60)} minutes...`);
       setTimeout(processRequestQueue, Math.min(waitTime, 60000)); // Check every minute max
       return;
@@ -175,6 +221,10 @@ async function processRequestQueue() {
       // Rate limit expired, reset
       rateLimitResetTime = 0;
     }
+  }
+  
+  if (shouldPauseForSleep()) {
+    return;
   }
   
   isProcessingQueue = true;
@@ -192,6 +242,12 @@ async function processRequestQueue() {
     activeRequests++;
     lastRequestTime = Date.now();
     
+    if (lastSleepRequestTimestamp && (lastRequestTime - lastSleepRequestTimestamp) > SLEEP_IDLE_RESET_MS) {
+      requestsSinceLastSleep = 0;
+    }
+    lastSleepRequestTimestamp = lastRequestTime;
+    requestsSinceLastSleep++;
+    
     // Make the request
     makeLocationRequest(screenName)
       .then(location => {
@@ -205,6 +261,15 @@ async function processRequestQueue() {
         // Continue processing queue
         setTimeout(processRequestQueue, 200);
       });
+    
+    if (requestsSinceLastSleep >= REQUESTS_BEFORE_SLEEP) {
+      const sleepDuration = getSleepDuration();
+      nextSleepEndTime = Date.now() + sleepDuration;
+      requestsSinceLastSleep = 0;
+      console.log(`Processed ${REQUESTS_BEFORE_SLEEP} requests, sleeping for ${Math.ceil(sleepDuration / 1000)} seconds`);
+      scheduleSleepResume(sleepDuration, true);
+      break;
+    }
   }
   
   isProcessingQueue = false;
@@ -900,4 +965,3 @@ if (document.readyState === 'loading') {
 } else {
   init();
 }
-
